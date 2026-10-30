@@ -1,0 +1,17 @@
+services:
+  db:
+    image: postgres:17
+    container_name: outreach-db
+    environment:
+      POSTGRES_USER: outreach
+      POSTGRES_PASSWORD: outreach # local only; on AWS the password lives in Secrets Manager
+      POSTGRES_DB: outreach
+    ports:
+      - "5432:5432"
+    volumes:
+      - outreach-data:/var/lib/postgresql/data
+      # runs once, on the first start with an empty database
+      - ./schema.sql:/docker-entrypoint-initdb.d/schema.sql
+
+volumes:
+  outreach-data:

@@ -9,7 +9,14 @@ leads.csv → buildPrompt(lead) → callLLM() → email
 
 All AI calls go through one function, `callLLM()`, which is where cost logging lives.
 
-## Run
+## Versions
+
+| Version | File | What it adds |
+|---|---|---|
+| v0 | `index.ts` | emails + cost log printed to the terminal |
+| v1 | `index_pg.ts` | emails and costs **saved in Postgres** (`emails`, `ai_usage`), receipt from a SQL query |
+
+## Run v0
 
 ```
 npm install
@@ -90,3 +97,46 @@ Total: $0.0352 for 5 emails
 ```
 
 Costs are in USD, from Anthropic's per-million-token prices. Output tokens include the model's thinking.
+
+## v1: Postgres
+
+v0 forgets everything when the program ends. v1 saves every email and every AI call's cost in Postgres, so costs can be queried per organization across runs.
+
+```
+leads.csv → buildPrompt(lead) → callLLM() → INSERT INTO emails
+                                    └──► INSERT INTO ai_usage (org_id, model, tokens, cost_usd)
+
+SELECT org_id, COUNT(*), SUM(cost_usd) FROM ai_usage GROUP BY org_id
+```
+
+### Run v1
+
+```
+docker compose up -d                  # Postgres 17; schema.sql runs on the first start
+echo "DATABASE_URL=postgres://outreach:outreach@localhost:5432/outreach" >> .env
+npx tsx index_pg.ts
+```
+
+Check the tables: `docker exec -it outreach-db psql -U outreach -c "\dt"`
+
+### Schema
+
+| Table | Columns |
+|---|---|
+| `emails` | id, org_id, lead_name, company, email_text, created_at |
+| `ai_usage` | id, org_id, model, input_tokens, output_tokens, cost_usd, created_at |
+
+- `cost_usd` is `numeric(12,6)`: an exact decimal, never a float, for money.
+- Every table has `org_id`, so it's ready for multi-tenancy. In a Supabase stack, Row-Level Security policies on `org_id` would enforce tenant isolation in the database itself.
+
+### Result after two runs
+
+```text
+┌─────────┬────────┬───────┬────────────┐
+│ (index) │ org_id │ calls │ total_usd  │
+├─────────┼────────┼───────┼────────────┤
+│ 0       │ 'acme' │ '10'  │ '0.071368' │
+└─────────┴────────┴───────┴────────────┘
+```
+
+The data persists between runs. `pg` returns `numeric` and `bigint` as strings on purpose, so no precision is lost.
