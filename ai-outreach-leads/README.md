@@ -15,6 +15,7 @@ All AI calls go through one function, `callLLM()`, which is where cost logging l
 |---|---|---|
 | v0 | `index.ts` | emails + cost log printed to the terminal |
 | v1 | `index_pg.ts` | emails and costs **saved in Postgres** (`emails`, `ai_usage`), receipt from a SQL query |
+| v1.1 | `index_structured.ts` | **structured output** `{ subject, body }` + a markdown check; failed calls are skipped but still logged |
 
 ## Run v0
 
@@ -140,3 +141,53 @@ Check the tables: `docker exec -it outreach-db psql -U outreach -c "\dt"`
 ```
 
 The data persists between runs. `pg` returns `numeric` and `bigint` as strings on purpose, so no precision is lost.
+
+## v1.1: Structured output
+
+Reading v0's output showed two problems: one email came back **without a subject line**, and another had a subject wrapped in **markdown** (`**Subject:**`), which email clients would show as raw stars. Free text has no guaranteed shape.
+
+v1.1 asks Claude for an object instead of text, validated against a schema:
+
+```ts
+const EmailSchema = z.object({ subject: z.string(), body: z.string() });
+
+const response = await client.messages.parse({
+  ...,
+  output_config: { format: zodOutputFormat(EmailSchema) },
+});
+response.parsed_output   // { subject, body }, or null if it didn't fit the schema
+```
+
+**The schema guarantees the shape, not the content.** `"**Hello**"` is still a valid string, so the pattern is *instruct + verify*:
+
+- the prompt asks for plain text (no markdown, asterisks, `#` headings or backticks);
+- the code checks the subject with `isPlainText()` and skips the lead if it fails.
+
+**Order inside `callLLM()`:** the cost is logged **before** the output is checked. A call that fails parsing was still paid for, so it still appears in `ai_usage`.
+
+### Run v1.1
+
+On a database created before v1.1, apply the migration once:
+
+```
+docker exec -i outreach-db psql -U outreach < migrations/002_add_subject.sql
+npx tsx index_structured.ts
+```
+
+`schema.sql` acts as migration 001 (it runs automatically on an empty database); `migrations/` holds the numbered changes after it.
+
+### Result
+
+All 5 emails had a subject and no markdown; `Skipped: none`.
+
+### What I noticed: paid calls without an email
+
+```
+ emails | calls
+--------+-------
+     15 |    17
+```
+
+Two runs crashed **after** the API call (receipt saved) but **before** `INSERT INTO emails`, because the `subject` column wasn't there yet. Each left one lonely `ai_usage` row and no email. Logging the cost first is what made this visible.
+
+**Next:** a `status` column on `ai_usage` (`pending` → `saved` / `parse_failed` / `check_failed`). A row that stays `pending` marks a crash, so "what did failures cost?" becomes one query.
