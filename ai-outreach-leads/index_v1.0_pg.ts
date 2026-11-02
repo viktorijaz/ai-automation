@@ -1,4 +1,4 @@
-// v1: same as index.ts, but emails and costs are saved in Postgres
+// v1: same as index_v0.ts, but emails and costs are saved in Postgres
 import { readFileSync } from "node:fs";
 import Anthropic from "@anthropic-ai/sdk";
 import pg from "pg";
@@ -13,7 +13,7 @@ type Lead = {
 
 // ---------- Read the leads ----------
 
-const text = readFileSync("leads.csv", "utf-8");
+const text = readFileSync("data/leads.csv", "utf-8");
 const rows = text.trim().split("\n").slice(1);
 const leads: Lead[] = rows.map((line) => {
   const [name, company, role, website, note] = line.split(",");

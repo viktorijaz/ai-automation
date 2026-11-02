@@ -1,4 +1,5 @@
-// v1.2: every receipt has a status; the email and "saved" are written in one transaction
+// v1.3: API failures skip one lead (or stop the run), instead of crashing everything
+
 import { readFileSync } from "node:fs";
 import Anthropic from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
@@ -15,7 +16,7 @@ type Lead = {
 
 // ---------- Read the leads ----------
 
-const text = readFileSync("leads.csv", "utf-8");
+const text = readFileSync("data/leads.csv", "utf-8");
 const rows = text.trim().split("\n").slice(1);
 const leads: Lead[] = rows.map((line) => {
   const [name, company, role, website, note] = line.split(",");
@@ -25,7 +26,12 @@ const leads: Lead[] = rows.map((line) => {
 // ---------- Connections ----------
 
 process.loadEnvFile();
-const client = new Anthropic();
+// The SDK already retries 429 / 5xx / network errors with growing pauses.
+// We only tune it. Never add a second retry loop on top: retries multiply.
+const client = new Anthropic({
+  maxRetries: 3, // how many retries after the first attempt?
+  timeout: 60_000, // 60 seconds, in MILLISECONDS
+});
 const db = new pg.Pool({ connectionString: process.env.DATABASE_URL });
 
 // ---------- Settings ----------
@@ -147,22 +153,50 @@ Sign it with the sender's name. Never use placeholders or square brackets.
 Plain text only: no markdown, no asterisks, no # headings, no backticks.`;
 }
 
+// ---------- Which errors are temporary? ----------
+
+// Temporary = might work for the next lead: skip this one, keep going.
+// Everything else (bad key, wrong model, database down, unknown) = stop the run:
+// it would fail the same way for every lead.
+function isTemporary(e: unknown): boolean {
+  return (
+    e instanceof Anthropic.RateLimitError || // 429: too many requests
+    e instanceof Anthropic.InternalServerError || // 5xx: Anthropic's side
+    e instanceof Anthropic.APIConnectionError // network, timeouts
+  );
+}
+
 // ---------- Every lead, one email each ----------
 
-const skipped: string[] = [];
+const skipped: { name: string; reason: string }[] = [];
 
 for (const lead of leads) {
-  const { email, usageId } = await callLLM(buildPrompt(lead), ORG_ID);
+  try {
+    const { email, usageId } = await callLLM(buildPrompt(lead), ORG_ID);
 
-  if (email === null) {
-    skipped.push(lead.name);
-    continue;
+    if (email === null) {
+      skipped.push({ name: lead.name, reason: "parse or check failed" });
+      continue;
+    }
+
+    await saveEmail(lead, email, usageId);
+    console.log(
+      `\n===== ${lead.name} =====\nSubject: ${email.subject}\n\n${email.body}`,
+    );
+  } catch (e) {
+    if (isTemporary(e)) {
+      // is it worth trying the next lead?
+      // no response came back, so no tokens and no receipt: just remember it
+      skipped.push({
+        name: lead.name,
+        reason: e instanceof Error ? e.message : String(e),
+      });
+      console.warn(`skipped ${lead.name}: temporary API error`);
+      continue; // move on to the next lead
+    }
+    console.error(`stopping the run at ${lead.name}`);
+    throw e; // anything else: stop everything
   }
-
-  await saveEmail(lead, email, usageId);
-  console.log(
-    `\n===== ${lead.name} =====\nSubject: ${email.subject}\n\n${email.body}`,
-  );
 }
 
 // ---------- The receipt, by status ----------
@@ -173,6 +207,8 @@ const result = await db.query(
    GROUP BY status`, // one row per status
 );
 console.table(result.rows);
-console.log(`Skipped: ${skipped.length ? skipped.join(", ") : "none"}`);
+console.log(
+  `Skipped: ${skipped.length ? skipped.map((s) => `${s.name} (${s.reason})`).join(", ") : "none"}`,
+);
 
 await db.end();

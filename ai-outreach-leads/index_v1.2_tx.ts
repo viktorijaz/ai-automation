@@ -1,4 +1,4 @@
-// v1.1: structured output. Claude returns { subject, body }, checked before saving
+// v1.2: every receipt has a status; the email and "saved" are written in one transaction
 import { readFileSync } from "node:fs";
 import Anthropic from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
@@ -15,7 +15,7 @@ type Lead = {
 
 // ---------- Read the leads ----------
 
-const text = readFileSync("leads.csv", "utf-8");
+const text = readFileSync("data/leads.csv", "utf-8");
 const rows = text.trim().split("\n").slice(1);
 const leads: Lead[] = rows.map((line) => {
   const [name, company, role, website, note] = line.split(",");
@@ -42,53 +42,93 @@ const PRICES: Record<string, { input: number; output: number }> = {
 // ---------- The shape we want back ----------
 
 const EmailSchema = z.object({
-  subject: z.string(), // field 1
-  body: z.string(), // field 2
+  subject: z.string(),
+  body: z.string(),
 });
-type Email = z.infer<typeof EmailSchema>; // TypeScript type made from the schema
+type Email = z.infer<typeof EmailSchema>;
 
-// The schema guarantees the SHAPE, not the CONTENT: check for markdown ourselves
 function isPlainText(s: string): boolean {
-  return !/[*#`]/.test(s); // true when none of * # ` appear
+  return !/[*#`]/.test(s);
 }
 
 // ---------- The ONE place every AI call goes through ----------
 
-async function callLLM(prompt: string, orgId: string): Promise<Email | null> {
+// Now returns TWO things: the email (or null) and the id of its receipt
+type LLMResult = { email: Email | null; usageId: string }; // pg returns bigint ids as strings
+
+async function callLLM(prompt: string, orgId: string): Promise<LLMResult> {
   const response = await client.messages.parse({
-    // which method validates against a schema?
     model: MODEL,
     max_tokens: 2000,
     output_config: {
       effort: "low",
-      format: zodOutputFormat(EmailSchema), // which schema?
+      format: zodOutputFormat(EmailSchema),
     },
     messages: [{ role: "user", content: prompt }],
   });
 
-  // 1. Log the cost FIRST: the call is paid for, whether parsing worked or not
+  // 1. The receipt, committed immediately as 'pending'. OUTSIDE any transaction:
+  //    money already spent must survive a rollback.
   const { input_tokens, output_tokens } = response.usage;
   const price = PRICES[MODEL];
   const cost =
     (input_tokens * price.input + output_tokens * price.output) / 1_000_000;
-  await db.query(
-    `INSERT INTO ai_usage (org_id, model, input_tokens, output_tokens, cost_usd)
-     VALUES ($1, $2, $3, $4, $5)`,
+  const receipt = await db.query(
+    `INSERT INTO ai_usage (org_id, model, input_tokens, output_tokens, cost_usd, status)
+     VALUES ($1, $2, $3, $4, $5, 'pending')
+     RETURNING id`, // which column do we need back, to find this row again?
     [orgId, MODEL, input_tokens, output_tokens, cost],
   );
+  const usageId: string = receipt.rows[0].id; // same column
 
-  // 2. Then check what came back
-  const email = response.parsed_output; // where does the parsed object live? (null if parsing failed)
+  // 2. Check what came back; record WHY a paid call produced nothing
+  const email = response.parsed_output;
   if (email === null) {
+    await db.query(
+      `UPDATE ai_usage SET status = 'parse_failed' WHERE id = $1`,
+      [usageId],
+    ); // which failure?
     console.warn(`parse failed, stop_reason: ${response.stop_reason}`);
-    return null;
+    return { email: null, usageId };
   }
   if (!isPlainText(email.subject)) {
-    // which field must never contain markdown?
+    await db.query(
+      `UPDATE ai_usage SET status = 'check_failed' WHERE id = $1`,
+      [usageId],
+    ); // which failure?
     console.warn(`markdown in subject: ${email.subject}`);
-    return null;
+    return { email: null, usageId };
   }
-  return email;
+  return { email, usageId };
+}
+
+// ---------- Save email + mark receipt 'saved', all or nothing ----------
+
+async function saveEmail(
+  lead: Lead,
+  email: Email,
+  usageId: string,
+): Promise<void> {
+  const conn = await db.connect(); // borrow ONE connection: BEGIN/COMMIT must share it
+  try {
+    await conn.query("BEGIN"); // start the transaction
+
+    await conn.query(
+      `INSERT INTO emails (org_id, lead_name, company, subject, email_text, ai_usage_id)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [ORG_ID, lead.name, lead.company, email.subject, email.body, usageId], // link to the receipt
+    );
+    await conn.query(`UPDATE ai_usage SET status = 'saved' WHERE id = $1`, [
+      usageId,
+    ]); // success!
+
+    await conn.query("COMMIT"); // make both permanent
+  } catch (e) {
+    await conn.query("ROLLBACK"); // undo both
+    throw e;
+  } finally {
+    conn.release(); // give the connection back to the pool, ALWAYS
+  }
 }
 
 // ---------- The prompt ----------
@@ -104,7 +144,7 @@ function buildPrompt(lead: Lead): string {
 Mention that they are ${lead.note}. No hype, no buzzwords.
 The email is from ${SENDER.name} at ${SENDER.company}, who offers ${SENDER.offer}.
 Sign it with the sender's name. Never use placeholders or square brackets.
-Plain text only: no markdown, no asterisks, no # headings, no backticks.`; // what must the email never contain?
+Plain text only: no markdown, no asterisks, no # headings, no backticks.`;
 }
 
 // ---------- Every lead, one email each ----------
@@ -112,30 +152,25 @@ Plain text only: no markdown, no asterisks, no # headings, no backticks.`; // wh
 const skipped: string[] = [];
 
 for (const lead of leads) {
-  const email = await callLLM(buildPrompt(lead), ORG_ID);
+  const { email, usageId } = await callLLM(buildPrompt(lead), ORG_ID);
 
   if (email === null) {
-    skipped.push(lead.name); // remember who failed
+    skipped.push(lead.name);
     continue;
   }
 
-  await db.query(
-    `INSERT INTO emails (org_id, lead_name, company, subject, email_text)
-     VALUES ($1, $2, $3, $4, $5)`,
-    [ORG_ID, lead.name, lead.company, email.subject, email.body], // subject, then body
-  );
-
+  await saveEmail(lead, email, usageId);
   console.log(
     `\n===== ${lead.name} =====\nSubject: ${email.subject}\n\n${email.body}`,
   );
 }
 
-// ---------- The receipt ----------
+// ---------- The receipt, by status ----------
 
 const result = await db.query(
-  `SELECT org_id, COUNT(*) AS calls, SUM(cost_usd) AS total_usd
+  `SELECT status, COUNT(*) AS calls, SUM(cost_usd) AS total_usd
    FROM ai_usage
-   GROUP BY org_id`,
+   GROUP BY status`, // one row per status
 );
 console.table(result.rows);
 console.log(`Skipped: ${skipped.length ? skipped.join(", ") : "none"}`);

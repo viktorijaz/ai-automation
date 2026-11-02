@@ -23,8 +23,8 @@ type Lead = z.infer<typeof LeadSchema>;
 
 // ---------- Read the leads ----------
 
-// Which file? `npx tsx index_csv.ts leads-messy.csv`, default leads.csv
-const file = process.argv[2] ?? "leads.csv";
+// Which file? `npx tsx index_v1.4_csv.ts data/leads-messy.csv`, default data/leads.csv
+const file = process.argv[2] ?? "data/leads.csv";
 const text = readFileSync(file, "utf-8");
 
 const records: unknown[] = parse(text, {

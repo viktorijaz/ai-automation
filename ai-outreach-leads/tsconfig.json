@@ -3,6 +3,9 @@
     "target": "ES2022",
     "module": "NodeNext",
     "strict": true,
-    "types": ["node"]
+    "types": [
+      "node"
+    ],
+    "skipLibCheck": true
   }
 }

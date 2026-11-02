@@ -10,7 +10,7 @@ type Lead = {
 };
 
 // 2. Read the whole file as text
-const text = readFileSync("leads.csv", "utf-8"); // which file?
+const text = readFileSync("data/leads.csv", "utf-8"); // which file?
 
 // 3. Split into lines, drop the header
 const lines = text.trim().split("\n"); // remove the empty last line, then split on newline

@@ -1,27 +1,55 @@
-// v1.3: API failures skip one lead (or stop the run), instead of crashing everything
+// v1.4: a real CSV parser + validation: messy client files can't shift columns or waste AI calls
 
 import { readFileSync } from "node:fs";
 import Anthropic from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { z } from "zod";
 import pg from "pg";
+import { parse } from "csv-parse/sync";
 
-type Lead = {
-  name: string;
-  company: string;
-  role: string;
-  website: string;
-  note: string;
-};
+// ---------- What a valid lead looks like ----------
+
+// The parser guarantees STRUCTURE (right columns); the schema checks CONTENT
+const LeadSchema = z.object({
+  name: z.string().min(1), // must not be empty
+  company: z.string().min(1),
+  role: z.string(),
+  website: z.string(),
+  note: z.string(),
+});
+type Lead = z.infer<typeof LeadSchema>;
 
 // ---------- Read the leads ----------
 
-const text = readFileSync("leads.csv", "utf-8");
-const rows = text.trim().split("\n").slice(1);
-const leads: Lead[] = rows.map((line) => {
-  const [name, company, role, website, note] = line.split(",");
-  return { name, company, role, website, note };
+// Which file? `npx tsx index_v1.4_csv.ts data/leads-messy.csv`, default data/leads.csv
+const file = process.argv[2] ?? "data/leads.csv";
+const text = readFileSync(file, "utf-8");
+
+const records: unknown[] = parse(text, {
+  columns: true, // use the header row as object keys
+  skip_empty_lines: true,
+  trim: true, // strip stray spaces around values
+  bom: true, // strip Excel's invisible byte-order mark
 });
+
+// Validate BEFORE paying for any AI call
+const leads: Lead[] = [];
+const invalid: { row: number; reason: string }[] = [];
+
+records.forEach((record, i) => {
+  const result = LeadSchema.safeParse(record); // the Zod method that returns success/error instead of throwing
+  if (result.success) {
+    // did it pass?
+    leads.push(result.data);
+  } else {
+    invalid.push({ row: i + 2, reason: result.error.issues[0].message }); // +2: header + 1-based
+  }
+});
+
+console.log(
+  `Parsed ${records.length} rows from ${file}: ${leads.length} valid, ${invalid.length} invalid`,
+);
+for (const bad of invalid) console.warn(`  row ${bad.row}: ${bad.reason}`);
 
 // ---------- Connections ----------
 
