@@ -16,6 +16,11 @@ All AI calls go through one function, `callLLM()`, which is where cost logging l
 | v0 | `index.ts` | emails + cost log printed to the terminal |
 | v1 | `index_pg.ts` | emails and costs **saved in Postgres** (`emails`, `ai_usage`), receipt from a SQL query |
 | v1.1 | `index_structured.ts` | **structured output** `{ subject, body }` + a markdown check; failed calls are skipped but still logged |
+| v1.2 | `index_tx.ts` | every receipt has a **status**; email + `saved` written in one **transaction** |
+| v1.3 | `index_retry.ts` | **error handling**: temporary API errors skip one lead, anything else stops the run |
+| v1.4 | `index_csv.ts` | a **real CSV parser** + Zod validation of every row before any AI call |
+| v1.5 | `index_guard.ts` + `guard.ts` | **prompt-injection guard**, red-teamed before/after, with **unit tests** |
+| v1.6 | `index_idem.ts` | **idempotency**: re-running a CSV never emails or pays for the same lead twice |
 
 ## Run v0
 
@@ -192,6 +197,66 @@ Two runs crashed **after** the API call (receipt saved) but **before** `INSERT I
 
 **Next:** a `status` column on `ai_usage` (`pending` → `saved` / `parse_failed` / `check_failed`). A row that stays `pending` marks a crash, so "what did failures cost?" becomes one query.
 
+## v1.2: Receipt status + transactions
+
+The 15-vs-17 finding showed that "paid" and "saved" could drift apart. v1.2 makes every receipt say what happened after the money was spent:
+
+| `status` | Meaning |
+|---|---|
+| `pending` | paid, result not saved yet (stays this way if the program crashes) |
+| `saved` | email saved |
+| `parse_failed` | the answer didn't fit the schema |
+| `check_failed` | it fit, but failed the markdown check |
+
+```
+① Claude answers                     → paid
+② INSERT ai_usage (status='pending') → committed immediately, OUTSIDE the transaction
+   BEGIN
+③ INSERT INTO emails (..., ai_usage_id)
+④ UPDATE ai_usage SET status='saved'
+   COMMIT                            → ③ and ④ together, or neither
+```
+
+The receipt stays **outside** the transaction on purpose: a rollback must never erase money that was really spent. The transaction runs on **one borrowed connection** (`db.connect()` … `release()`), because a pool may send `BEGIN`, `INSERT` and `COMMIT` to different connections.
+
+Migration: `migrations/003_status_and_link.sql` (`status` with a `CHECK`, and `emails.ai_usage_id` linking each email to its receipt).
+
+```sql
+SELECT status, COUNT(*), SUM(cost_usd) FROM ai_usage GROUP BY status;   -- what did failures cost?
+```
+
+## v1.3: Error handling
+
+The Anthropic SDK already retries 429 / 5xx / network errors with growing pauses, so v1.3 only tunes it (`maxRetries: 3`, `timeout: 60_000` ms) and **never adds a second retry loop**, because retries multiply.
+
+What happens when retries run out:
+
+| Error | Same for every lead? | Action |
+|---|---|---|
+| 429, 5xx, network/timeout | no, temporary | **skip this lead**, continue |
+| bad key, wrong model, bad request, database down, anything unknown | yes | **stop the run** |
+
+`isTemporary()` is an allowlist: only errors known to be temporary are skipped. Silently skipping 5,000 leads is worse than stopping at one.
+
+## v1.4: A real CSV parser
+
+`line.split(",")` breaks on real client files. `leads-messy.csv` is an Excel-style test file built to break it:
+
+| Trap | Example |
+|---|---|
+| comma inside a field | `"Brightline Logistics, GmbH"` |
+| escaped quotes | `"led by ""Northstar Ventures"""` |
+| Windows line endings + BOM | `\r\n`, invisible `\uFEFF` |
+| stray spaces, blank line | `  Sofia Lindqvist  ` |
+| newline inside a quoted note | Elena's two-line note |
+| empty required field | a row with no name |
+
+`csv-parse` handles the structure; a Zod `LeadSchema` checks the content. Invalid rows are reported and **never sent to the API**: reject cheaply, pay last.
+
+```
+npx tsx index_csv.ts leads-messy.csv
+```
+
 ## Red-team: prompt injection
 
 The `note` column is untrusted text from a client's CSV, and it goes straight into the prompt.
@@ -237,3 +302,59 @@ through, and code checks don't depend on the model behaving. Blocked emails get 
 and are never saved.
 
 **Limits:** 3 attacks, one run. Prompt injection has no complete fix; this is defence in depth.
+
+### Unit tests for the guard
+
+Layer 2 never fired in the live run, so it's proven with tests instead. `findThreat()` lives in `guard.ts`, a file of pure functions (importing it touches no API and no database), and `guard.test.ts` checks it with **Vitest**:
+
+- the **real** attacked emails from the v1.4 run (Mallory's link, Trent's leak) must be blocked: regression fixtures;
+- a **real** good email from v1.5 must pass: no false alarms;
+- one small case per rule (bare domains, `www.`, the canary, echoed tags, links in the subject).
+
+```
+npm test        # 11 tests, ~0.1 s, no API key or database needed
+```
+
+## v1.6: Idempotency
+
+Re-running a CSV (after a crash, or by mistake) must not email or pay for the same lead twice. Two parts, two jobs:
+
+| Part | Protects | When |
+|---|---|---|
+| `alreadyEmailed()` (a `SELECT` before calling Claude) | **money** | before the call |
+| `UNIQUE (org_id, lead_name, company)` + `ON CONFLICT DO NOTHING` | **correctness** | at insert, even if two runs overlap |
+
+The check alone isn't enough: two runs can both pass it before either saves. The constraint alone isn't enough either: the call would already be paid. If two runs do race, the loser's receipt gets status `duplicate`, so the wasted call stays visible.
+
+Migration: `migrations/005_one_email_per_lead.sql` (deletes older duplicate emails, keeps receipts, adds the constraint and the `duplicate` status).
+
+```
+docker exec -i outreach-db psql -U outreach < migrations/005_one_email_per_lead.sql
+npx tsx index_idem.ts leads.csv      # a re-run: already-emailed leads are skipped at no cost
+```
+
+**Limit:** the key is name + company, the best available without an email address in the CSV. `Brightline Logistics` and `Brightline Logistics, GmbH` count as different leads.
+
+## Design decisions
+
+| Decision | Principle |
+|---|---|
+| one `callLLM()` for every AI call | cost logging, statuses and the guard live in one place |
+| `PRICES[MODEL]`, `z.infer<typeof Schema>` | one source of truth; derive everything else |
+| receipt written before checking the output | a failed call was still paid for |
+| receipt **outside** the transaction | money already spent must survive a rollback |
+| one connection per transaction | a transaction belongs to a connection, not to the pool |
+| `RETURNING id` | get the new id atomically, no check-then-act race |
+| `alreadyEmailed()` **and** `UNIQUE` | the check saves money; the constraint guarantees correctness |
+| reject cheaply, pay last | in AI systems the model call is the expensive step |
+| retries at one layer only | retries multiply into retry storms |
+| allowlist of temporary errors | unknown errors stop the run |
+| layer 1 asks, layer 2 checks | never trust the model to obey; verify in code |
+| `numeric(12,6)` for cost | money is never a float |
+
+## Future work
+
+- **Row-Level Security**, together with a UI app and login: RLS needs a logged-in user to check against; a batch script that sets its own `org_id` proves nothing.
+- **A job queue** (pg-boss or BullMQ): process thousands of leads in the background, survive crashes, claim a lead before paying for it.
+- **Per-customer budgets and rate limits**, structured logging, and splitting the scripts into modules.
+- **Deployment:** cloud Postgres, the worker in the cloud, CI running `npm test` on every push.
