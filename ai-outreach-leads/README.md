@@ -173,14 +173,11 @@ response.parsed_output   // { subject, body }, or null if it didn't fit the sche
 
 ### Run v1.1
 
-On a database created before v1.1, apply the migration once:
-
 ```
-docker exec -i outreach-db psql -U outreach < migrations/002_add_subject.sql
 npx tsx index_v1.1_structured.ts
 ```
 
-`schema.sql` acts as migration 001 (it runs automatically on an empty database); `migrations/` holds the numbered changes after it.
+The `subject` column was added by a migration at the time; it's now part of the baseline `schema.sql` (see "Database schema" below).
 
 ### Result
 
@@ -220,7 +217,7 @@ The 15-vs-17 finding showed that "paid" and "saved" could drift apart. v1.2 make
 
 The receipt stays **outside** the transaction on purpose: a rollback must never erase money that was really spent. The transaction runs on **one borrowed connection** (`db.connect()` … `release()`), because a pool may send `BEGIN`, `INSERT` and `COMMIT` to different connections.
 
-Migration: `migrations/003_status_and_link.sql` (`status` with a `CHECK`, and `emails.ai_usage_id` linking each email to its receipt).
+Schema change: `status` with a `CHECK`, and `emails.ai_usage_id` linking each email to its receipt (now in the baseline `schema.sql`).
 
 ```sql
 SELECT status, COUNT(*), SUM(cost_usd) FROM ai_usage GROUP BY status;   -- what did failures cost?
@@ -327,10 +324,9 @@ Re-running a CSV (after a crash, or by mistake) must not email or pay for the sa
 
 The check alone isn't enough: two runs can both pass it before either saves. The constraint alone isn't enough either: the call would already be paid. If two runs do race, the loser's receipt gets status `duplicate`, so the wasted call stays visible.
 
-Migration: `migrations/005_one_email_per_lead.sql` (deletes older duplicate emails, keeps receipts, adds the constraint and the `duplicate` status).
+Schema change: the `emails_one_per_lead` constraint and the `duplicate` status (now in the baseline `schema.sql`; the original migration also deleted older duplicate emails while keeping their receipts).
 
 ```
-docker exec -i outreach-db psql -U outreach < migrations/005_one_email_per_lead.sql
 npx tsx index_v1.6_idem.ts data/leads.csv      # a re-run: already-emailed leads are skipped at no cost
 ```
 
@@ -385,6 +381,16 @@ Worst case 2 × 4 = 8 requests per lead, spread over minutes instead of seconds,
 `data/leads-messy.csv` → 4 valid leads queued, 1 invalid row rejected before any job existed. The worker saved one new email (Ana at "Brightline Logistics, GmbH") and skipped Marko, Sofia and Elena as `already_emailed`, recognized from an earlier run of a **different** CSV file, at no cost.
 
 **Not yet tested:** killing the worker mid-run and checking that a restart finishes the remaining jobs.
+
+## Database schema
+
+`schema.sql` is the **baseline**: the full schema, squashed from the migrations written during v1.0–v1.6 (they remain in git history). It runs automatically when Docker starts with an empty database, and is run once by hand on a fresh cloud database:
+
+```
+psql "$DATABASE_URL" < schema.sql
+```
+
+Every change after the baseline is a numbered file in `migrations/` (`001_...`, `002_...`), applied in order to every database. The baseline itself is never edited.
 
 ## Design decisions
 
