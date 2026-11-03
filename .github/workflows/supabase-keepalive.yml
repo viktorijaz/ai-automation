@@ -1,0 +1,18 @@
+# Keeps the free Supabase project awake: a real database query twice a week, from outside Supabase
+name: supabase-keepalive
+
+on:
+  schedule:
+    - cron: "0 9 * * 1,4" # Monday and Thursday, 09:00 UTC
+  workflow_dispatch: # run it by hand from the Actions tab
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Query the database
+        env:
+          DATABASE_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          sudo apt-get install -y -qq postgresql-client > /dev/null
+          psql "$DATABASE_URL" -c "select count(*) as leads from public.leads;"
