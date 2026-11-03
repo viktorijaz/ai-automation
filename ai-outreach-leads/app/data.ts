@@ -1,11 +1,23 @@
 // Read-only queries for the dashboard
 import { db } from "../pipeline";
 
-export const ORG_ID = "acme"; // until login exists, the UI shows one organization
+import { createClient } from "../lib/supabase/server";
 
-// Temporary lock until Google login: on locally (DASHBOARD_ENABLED), or behind proxy.ts's password
-export function dashboardEnabled(): boolean {
-  return process.env.DASHBOARD_ENABLED === "true" || Boolean(process.env.DASHBOARD_PASSWORD);
+export type CurrentOrg = { orgId: string; email: string };
+
+// Who is logged in, and which org they belong to (null = not logged in)
+export async function getCurrentOrg(): Promise<CurrentOrg | null> {
+  // Local development without login
+  if (process.env.DASHBOARD_ENABLED === "true") return { orgId: "acme", email: "local dev" };
+
+  const supabase = await createClient();
+  const { data } = await supabase.auth.getClaims(); // verified token, not just a cookie
+  const claims = data?.claims;
+  if (!claims?.sub) return null;
+
+  const member = await db.query(`SELECT org_id FROM members WHERE user_id = $1`, [claims.sub]);
+  if (member.rowCount === 0) return null;
+  return { orgId: member.rows[0].org_id, email: String(claims.email ?? "") };
 }
 
 export type Progress = {

@@ -1,5 +1,7 @@
 # ai-outreach
 
+**Live:** [ai-outreach-leads.vercel.app](https://ai-outreach-leads.vercel.app) (password-protected) · on Vercel + Supabase, scheduled by Supabase `pg_cron`, kept awake by GitHub Actions
+
 Upload a CSV of leads; Claude writes a personalized cold email for each one, and every AI call is logged with its cost.
 
 ```

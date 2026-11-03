@@ -1,6 +1,7 @@
-// The dashboard: upload, progress, leads (local only until login exists)
-import { notFound } from "next/navigation";
-import { dashboardEnabled, getLeads, getProgress, ORG_ID } from "./data";
+// The dashboard: upload, progress, leads for the logged-in user's org
+import { redirect } from "next/navigation";
+import { signOut } from "./actions";
+import { getCurrentOrg, getLeads, getProgress } from "./data";
 import { ProcessButton, UploadForm } from "./forms";
 
 export const dynamic = "force-dynamic"; // always read fresh data
@@ -8,15 +9,19 @@ export const dynamic = "force-dynamic"; // always read fresh data
 const usd = (n: number) => `$${n.toFixed(4)}`;
 
 export default async function Home() {
-  if (!dashboardEnabled()) notFound();
-  const [progress, leads] = await Promise.all([getProgress(ORG_ID), getLeads(ORG_ID)]);
+  const org = await getCurrentOrg();
+  if (!org) redirect("/login");
+  const [progress, leads] = await Promise.all([getProgress(org.orgId), getLeads(org.orgId)]);
   const { counts } = progress;
 
   return (
     <main>
       <header>
         <h1>ai-outreach</h1>
-        <span className="muted">org: {ORG_ID}</span>
+        <form action={signOut} className="row">
+          <span className="muted">{org.email} · org: {org.orgId}</span>
+          {process.env.DASHBOARD_ENABLED !== "true" && <button className="secondary">Sign out</button>}
+        </form>
       </header>
 
       <section>

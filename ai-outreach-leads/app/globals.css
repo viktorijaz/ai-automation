@@ -63,3 +63,7 @@ pre {
   padding: 10px;
   margin: 8px 0 0;
 }
+
+button.secondary { background: #fff; color: #1f2328; border-color: #d0d7de; }
+.login { max-width: 420px; margin-top: 15vh; text-align: center; }
+.login button { margin-top: 12px; padding: 10px 20px; font-size: 16px; }
