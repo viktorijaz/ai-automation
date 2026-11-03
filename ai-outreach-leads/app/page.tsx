@@ -1,5 +1,6 @@
 // The dashboard: upload, progress, leads (local only until login exists)
-import { getLeads, getProgress, ORG_ID } from "./data";
+import { notFound } from "next/navigation";
+import { dashboardEnabled, getLeads, getProgress, ORG_ID } from "./data";
 import { ProcessButton, UploadForm } from "./forms";
 
 export const dynamic = "force-dynamic"; // always read fresh data
@@ -7,6 +8,7 @@ export const dynamic = "force-dynamic"; // always read fresh data
 const usd = (n: number) => `$${n.toFixed(4)}`;
 
 export default async function Home() {
+  if (!dashboardEnabled()) notFound();
   const [progress, leads] = await Promise.all([getProgress(ORG_ID), getLeads(ORG_ID)]);
   const { counts } = progress;
 

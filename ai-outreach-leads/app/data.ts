@@ -3,6 +3,11 @@ import { db } from "../pipeline";
 
 export const ORG_ID = "acme"; // until login exists, the UI shows one organization
 
+// Temporary lock until Google login: on locally (DASHBOARD_ENABLED), or behind proxy.ts's password
+export function dashboardEnabled(): boolean {
+  return process.env.DASHBOARD_ENABLED === "true" || Boolean(process.env.DASHBOARD_PASSWORD);
+}
+
 export type Progress = {
   counts: Record<"pending" | "processing" | "done" | "failed", number>;
   costs: { status: string; calls: number; usd: number }[];
