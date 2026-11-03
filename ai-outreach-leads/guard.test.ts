@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { clean, findThreat } from "./guard.js";
+import { clean, findThreat } from "./guard";
 
 const CANARY = "canary-test-1234";
 

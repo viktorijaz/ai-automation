@@ -1,14 +1,15 @@
 // Everything needed to process leads; importing it runs nothing
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import Anthropic from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { z } from "zod";
 import pg from "pg";
 import { parse } from "csv-parse/sync";
-import { clean, findThreat } from "./guard.js";
+import { clean, findThreat } from "./guard";
 
-process.loadEnvFile();
+// Locally .env holds the secrets; on Vercel they come from the project settings
+if (existsSync(".env")) process.loadEnvFile();
 
 // Quick retries for network blips; longer outages are retried by later batches
 export const client = new Anthropic({ maxRetries: 1, timeout: 60_000 });
@@ -25,30 +26,53 @@ const PRICES: Record<string, { input: number; output: number }> = {
 // ---------- Leads ----------
 
 export const LeadSchema = z.object({
-  name: z.string().min(1),
-  company: z.string().min(1),
+  name: z.string().min(1, "name is missing"),
+  company: z.string().min(1, "company is missing"),
   role: z.string(),
   website: z.string(),
   note: z.string(),
 });
 export type Lead = z.infer<typeof LeadSchema>;
 
-// Parse and validate a CSV; invalid rows are returned, never sent to the API
-export function readLeads(file: string): { leads: Lead[]; invalid: { row: number; reason: string }[] } {
-  const records: unknown[] = parse(readFileSync(file, "utf-8"), {
+export type Invalid = { row: number; reason: string }; // row = line number in the file
+
+// Parse and validate CSV text; invalid rows are returned, never sent to the API
+export function parseLeads(text: string): { leads: Lead[]; invalid: Invalid[] } {
+  // info: true adds the line number where each record ends in the file
+  const records: { record: unknown; info: { lines: number } }[] = parse(text, {
     columns: true,
     skip_empty_lines: true,
     trim: true,
     bom: true,
+    info: true,
   });
   const leads: Lead[] = [];
-  const invalid: { row: number; reason: string }[] = [];
-  records.forEach((record, i) => {
+  const invalid: Invalid[] = [];
+  for (const { record, info } of records) {
     const result = LeadSchema.safeParse(record);
     if (result.success) leads.push(result.data);
-    else invalid.push({ row: i + 2, reason: result.error.issues[0].message });
-  });
+    else invalid.push({ row: info.lines, reason: result.error.issues.map((issue) => issue.message).join(", ") });
+  }
   return { leads, invalid };
+}
+
+export function readLeads(file: string): { leads: Lead[]; invalid: Invalid[] } {
+  return parseLeads(readFileSync(file, "utf-8"));
+}
+
+// Insert leads as 'pending'; already known leads (same org, name, company) are skipped
+export async function addLeads(leads: Lead[], orgId: string): Promise<number> {
+  let added = 0;
+  for (const lead of leads) {
+    const result = await db.query(
+      `INSERT INTO leads (org_id, name, company, role, website, note)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (org_id, name, company) DO NOTHING`,
+      [orgId, lead.name, lead.company, lead.role, lead.website, lead.note],
+    );
+    added += result.rowCount ?? 0;
+  }
+  return added;
 }
 
 // ---------- The prompt ----------
