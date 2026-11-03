@@ -1,4 +1,4 @@
-// v2.0 shared module: everything needed to process ONE lead; importing it runs nothing
+// Everything needed to process leads; importing it runs nothing
 import { readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import Anthropic from "@anthropic-ai/sdk";
@@ -10,7 +10,7 @@ import { clean, findThreat } from "./guard.js";
 
 process.loadEnvFile();
 
-// Quick retries for network blips; the job queue handles longer outages
+// Quick retries for network blips; longer outages are retried by later batches
 export const client = new Anthropic({ maxRetries: 1, timeout: 60_000 });
 export const db = new pg.Pool({ connectionString: process.env.DATABASE_URL });
 
@@ -166,10 +166,100 @@ async function alreadyEmailed(lead: Lead, orgId: string): Promise<boolean> {
 
 export type Outcome = "already_emailed" | "saved" | "not_saved" | "duplicate";
 
-// API and database errors are thrown, so the job queue can retry them
+// API and database errors are thrown, so processBatch() can retry the lead later
 export async function processLead(lead: Lead, orgId: string): Promise<Outcome> {
   if (await alreadyEmailed(lead, orgId)) return "already_emailed";
   const { email, usageId } = await callLLM(buildPrompt(lead), orgId);
   if (email === null) return "not_saved";
   return (await saveEmail(lead, email, usageId, orgId)) ? "saved" : "duplicate";
+}
+
+// ---------- v3.0: the leads table as the queue ----------
+
+const MAX_ATTEMPTS = 3;
+const STUCK_AFTER = "10 minutes"; // 'processing' longer than this = the run crashed
+
+type LeadRow = Lead & { id: string; org_id: string; attempts: number };
+
+// Errors that might pass on their own: try the lead again in a later run
+function isTemporary(e: unknown): boolean {
+  return (
+    e instanceof Anthropic.RateLimitError ||
+    e instanceof Anthropic.InternalServerError ||
+    e instanceof Anthropic.APIConnectionError
+  );
+}
+
+// A crashed run leaves leads in 'processing': give them back, or fail them after MAX_ATTEMPTS
+async function releaseStuck(): Promise<number> {
+  const result = await db.query(
+    `UPDATE leads
+     SET status = CASE WHEN attempts >= $1 THEN 'failed' ELSE 'pending' END,
+         last_error = 'run stopped while processing'
+     WHERE status = 'processing' AND claimed_at < now() - $2::interval`,
+    [MAX_ATTEMPTS, STUCK_AFTER],
+  );
+  return result.rowCount ?? 0;
+}
+
+// Take up to `size` pending leads; SKIP LOCKED lets overlapping runs take different leads
+async function claimBatch(size: number): Promise<LeadRow[]> {
+  const result = await db.query(
+    `UPDATE leads
+     SET status = 'processing', claimed_at = now(), attempts = attempts + 1
+     WHERE id IN (
+       SELECT id FROM leads
+       WHERE status = 'pending'
+       ORDER BY id
+       LIMIT $1
+       FOR UPDATE SKIP LOCKED
+     )
+     RETURNING id, org_id, name, company, role, website, note, attempts`,
+    [size],
+  );
+  return result.rows;
+}
+
+async function finishLead(id: string, status: "done" | "failed" | "pending", error: string | null) {
+  await db.query(`UPDATE leads SET status = $1, last_error = $2 WHERE id = $3`, [status, error, id]);
+}
+
+export type BatchResult = { released: number; claimed: number; done: number; failed: number; retry: number };
+
+// One run: release stuck leads, claim a batch, process each lead, record the outcome
+export async function processBatch(size = 5): Promise<BatchResult> {
+  const result: BatchResult = { released: await releaseStuck(), claimed: 0, done: 0, failed: 0, retry: 0 };
+  const batch = await claimBatch(size);
+  result.claimed = batch.length;
+
+  for (const [i, row] of batch.entries()) {
+    const { id, org_id, attempts, ...lead } = row;
+    try {
+      const outcome = await processLead(lead, org_id);
+      if (outcome === "not_saved") {
+        // Content problem (bad output, markdown, blocked attack): retrying would just pay again
+        await finishLead(id, "failed", "no usable email (parse, check or guard)");
+        result.failed++;
+      } else {
+        await finishLead(id, "done", null);
+        result.done++;
+      }
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      const giveUp = attempts >= MAX_ATTEMPTS;
+      await finishLead(id, giveUp ? "failed" : "pending", message);
+      if (giveUp) result.failed++;
+      else result.retry++;
+      // Not temporary (bad key, wrong model, database down): the rest of the batch would fail too
+      if (!isTemporary(e)) {
+        const untouched = batch.slice(i + 1).map((r) => r.id);
+        await db.query(
+          `UPDATE leads SET status = 'pending', attempts = attempts - 1 WHERE id = ANY($1)`,
+          [untouched],
+        ); // give back the leads this run never tried
+        break;
+      }
+    }
+  }
+  return result;
 }

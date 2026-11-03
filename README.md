@@ -27,7 +27,8 @@ Each folder is self-contained:
 cd <folder>
 npm install
 echo "ANTHROPIC_API_KEY=sk-ant-..." > .env
-npx tsx index.ts
 ```
+
+Then follow that folder's README.
 
 `.env` files are git-ignored. Never commit an API key.
