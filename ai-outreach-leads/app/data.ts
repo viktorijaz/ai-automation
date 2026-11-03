@@ -5,8 +5,8 @@ import { createClient } from "../lib/supabase/server";
 
 export type CurrentOrg = { orgId: string; email: string };
 
-// Who is logged in, and which org they belong to (null = not logged in)
-export async function getCurrentOrg(): Promise<CurrentOrg | null> {
+// Who is logged in, and which org they belong to (null = not logged in, "no-org" = logged in without an org)
+export async function getCurrentOrg(): Promise<CurrentOrg | null | "no-org"> {
   // Local development without login
   if (process.env.DASHBOARD_ENABLED === "true") return { orgId: "acme", email: "local dev" };
 
@@ -16,7 +16,7 @@ export async function getCurrentOrg(): Promise<CurrentOrg | null> {
   if (!claims?.sub) return null;
 
   const member = await db.query(`SELECT org_id FROM members WHERE user_id = $1`, [claims.sub]);
-  if (member.rowCount === 0) return null;
+  if (member.rowCount === 0) return "no-org";
   return { orgId: member.rows[0].org_id, email: String(claims.email ?? "") };
 }
 

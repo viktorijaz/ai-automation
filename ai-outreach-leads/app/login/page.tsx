@@ -6,7 +6,10 @@ export default function Login() {
   async function signIn() {
     await createClient().auth.signInWithOAuth({
       provider: "google",
-      options: { redirectTo: `${window.location.origin}/auth/callback` },
+      options: {
+        redirectTo: `${window.location.origin}/auth/callback`,
+        queryParams: { prompt: "select_account" }, // always show Google's account chooser
+      },
     });
   }
 

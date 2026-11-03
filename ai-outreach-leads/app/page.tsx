@@ -11,6 +11,19 @@ const usd = (n: number) => `$${n.toFixed(4)}`;
 export default async function Home() {
   const org = await getCurrentOrg();
   if (!org) redirect("/login");
+  if (org === "no-org") {
+    return (
+      <main>
+        <section>
+          <h2>No organization yet</h2>
+          <p className="muted">You're signed in, but your account isn't linked to an organization.</p>
+          <form action={signOut}>
+            <button className="secondary">Sign out</button>
+          </form>
+        </section>
+      </main>
+    );
+  }
   const [progress, leads] = await Promise.all([getProgress(org.orgId), getLeads(org.orgId)]);
   const { counts } = progress;
 
