@@ -9,23 +9,6 @@ data/leads.csv → buildPrompt(lead) → callLLM() → email
 
 All AI calls go through one function, `callLLM()`, which is where cost logging lives.
 
-## How it evolved
-
-Each step was a separate script at the time; all of it now lives in `pipeline.ts` (earlier scripts are in git history).
-
-| Version | What it added |
-|---|---|
-| v0 | emails + cost log printed to the terminal |
-| v1 | emails and costs **saved in Postgres** (`emails`, `ai_usage`), receipt from a SQL query |
-| v1.1 | **structured output** `{ subject, body }` + a markdown check; failed calls are skipped but still logged |
-| v1.2 | every receipt has a **status**; email + `saved` written in one **transaction** |
-| v1.3 | **error handling**: temporary API errors skip one lead, anything else stops the run |
-| v1.4 | a **real CSV parser** + Zod validation of every row before any AI call |
-| v1.5 | **prompt-injection guard** (`guard.ts`), red-teamed before/after, with **unit tests** |
-| v1.6 | **idempotency**: re-running a CSV never emails or pays for the same lead twice |
-| v2.0 | **job queue** (pg-boss): producer and consumer, crash recovery, no duplicate jobs |
-| v3.0 | **the `leads` table is the queue**: batches claimed with `SKIP LOCKED`, ready to run serverless |
-
 ## Run
 
 ```
@@ -234,7 +217,7 @@ What happens when retries run out:
 
 ## v1.4: A real CSV parser
 
-`line.split(",")` breaks on real client files. An Excel-style test file (in git history) was built to break it:
+`line.split(",")` breaks on real client files. `data/leads-messy.csv` is an Excel-style test file built to break it:
 
 | Trap | Example |
 |---|---|
@@ -250,7 +233,7 @@ What happens when retries run out:
 ## Red-team: prompt injection
 
 The `note` column is untrusted text from a client's CSV, and it goes straight into the prompt.
-An attack CSV (in git history) hid three attacks inside realistic notes:
+`data/leads-attack.csv` hides three attacks inside realistic notes:
 
 | Lead | Hidden in the note | Goal |
 |---|---|---|
