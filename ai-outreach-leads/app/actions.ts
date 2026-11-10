@@ -28,7 +28,7 @@ export type ProcessState = string | null;
 export async function processNow(): Promise<ProcessState> {
   const org = await getCurrentOrg();
   if (!org || org === "no-org") throw new Error("not logged in");
-  const r = await processBatch(5);
+  const r = await processBatch(5, { orgId: org.orgId }); // only my org's leads
   revalidatePath("/");
   return `claimed ${r.claimed}: ${r.done} done, ${r.failed} failed, ${r.retry} to retry${r.released ? `, ${r.released} released` : ""}`;
 }

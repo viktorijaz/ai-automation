@@ -205,6 +205,14 @@ const STUCK_AFTER = "10 minutes"; // 'processing' longer than this = the run cra
 
 type LeadRow = Lead & { id: string; org_id: string; attempts: number };
 
+// Who a run acts for: one org (a user's button) or every org (cron, CLI); no default on purpose
+export type Scope = { orgId: string } | "all-orgs";
+
+// null = no org filter; used as $n in "($n::text IS NULL OR org_id = $n)"
+function orgFilter(scope: Scope): string | null {
+  return scope === "all-orgs" ? null : scope.orgId;
+}
+
 // Errors that might pass on their own: try the lead again in a later run
 function isTemporary(e: unknown): boolean {
   return (
@@ -215,31 +223,33 @@ function isTemporary(e: unknown): boolean {
 }
 
 // A crashed run leaves leads in 'processing': give them back, or fail them after MAX_ATTEMPTS
-async function releaseStuck(): Promise<number> {
+async function releaseStuck(scope: Scope): Promise<number> {
   const result = await db.query(
     `UPDATE leads
      SET status = CASE WHEN attempts >= $1 THEN 'failed' ELSE 'pending' END,
          last_error = 'run stopped while processing'
-     WHERE status = 'processing' AND claimed_at < now() - $2::interval`,
-    [MAX_ATTEMPTS, STUCK_AFTER],
+     WHERE status = 'processing' AND claimed_at < now() - $2::interval
+       AND ($3::text IS NULL OR org_id = $3)`,
+    [MAX_ATTEMPTS, STUCK_AFTER, orgFilter(scope)],
   );
   return result.rowCount ?? 0;
 }
 
 // Take up to `size` pending leads; SKIP LOCKED lets overlapping runs take different leads
-async function claimBatch(size: number): Promise<LeadRow[]> {
+async function claimBatch(size: number, scope: Scope): Promise<LeadRow[]> {
   const result = await db.query(
     `UPDATE leads
      SET status = 'processing', claimed_at = now(), attempts = attempts + 1
      WHERE id IN (
        SELECT id FROM leads
        WHERE status = 'pending'
+         AND ($2::text IS NULL OR org_id = $2)
        ORDER BY id
        LIMIT $1
        FOR UPDATE SKIP LOCKED
      )
      RETURNING id, org_id, name, company, role, website, note, attempts`,
-    [size],
+    [size, orgFilter(scope)],
   );
   return result.rows;
 }
@@ -251,9 +261,9 @@ async function finishLead(id: string, status: "done" | "failed" | "pending", err
 export type BatchResult = { released: number; claimed: number; done: number; failed: number; retry: number };
 
 // One run: release stuck leads, claim a batch, process each lead, record the outcome
-export async function processBatch(size = 5): Promise<BatchResult> {
-  const result: BatchResult = { released: await releaseStuck(), claimed: 0, done: 0, failed: 0, retry: 0 };
-  const batch = await claimBatch(size);
+export async function processBatch(size: number, scope: Scope): Promise<BatchResult> {
+  const result: BatchResult = { released: await releaseStuck(scope), claimed: 0, done: 0, failed: 0, retry: 0 };
+  const batch = await claimBatch(size, scope);
   result.claimed = batch.length;
 
   for (const [i, row] of batch.entries()) {

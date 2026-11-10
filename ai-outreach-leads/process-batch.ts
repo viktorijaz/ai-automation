@@ -2,5 +2,5 @@
 import { db, processBatch } from "./pipeline";
 
 const size = Number(process.argv[2] ?? 5);
-console.log(await processBatch(size));
+console.log(await processBatch(size, "all-orgs"));
 await db.end();

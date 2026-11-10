@@ -1,4 +1,4 @@
-// Called every minute by Supabase pg_cron: process one batch of pending leads
+// Called every 5 hours by Supabase pg_cron: process one batch of pending leads
 import { timingSafeEqual } from "node:crypto";
 import { processBatch } from "../../../pipeline";
 
@@ -18,6 +18,6 @@ export async function POST(request: Request) {
   if (!isAuthorized(request.headers.get("authorization"))) {
     return Response.json({ error: "unauthorized" }, { status: 401 });
   }
-  const result = await processBatch(5);
+  const result = await processBatch(5, "all-orgs"); // the shared worker serves every org
   return Response.json(result);
 }

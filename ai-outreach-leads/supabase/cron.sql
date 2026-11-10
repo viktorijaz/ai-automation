@@ -1,4 +1,4 @@
--- Supabase only: every 5 minutes, call the Vercel route, but only when there is work.
+-- Supabase only: every 5 hours, call the Vercel route, but only when there is work.
 -- Not a migration: local Docker Postgres has no pg_cron / pg_net.
 --
 -- Before running this, once, in the Supabase SQL editor (values never go into git):
@@ -10,7 +10,7 @@ create extension if not exists pg_net;
 
 select cron.schedule(
   'process-leads',
-  '*/5 * * * *',
+  '0 */5 * * *', -- minute 0 of every 5th hour: 00:00, 05:00, 10:00, 15:00, 20:00 UTC
   $$
   select net.http_post(
     url := (select decrypted_secret from vault.decrypted_secrets where name = 'process_leads_url'),
