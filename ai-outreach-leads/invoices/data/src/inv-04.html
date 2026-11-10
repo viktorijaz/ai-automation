@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="mk">
+<head>
+<meta charset="utf-8">
+<title>ФАКТУРА 118/2026</title>
+<style>
+  @page { size: A4; margin: 18mm; }
+  body { font-family: "DejaVu Sans", Arial, sans-serif; font-size: 10.5pt; color: #222; }
+  .top { display: flex; justify-content: space-between; align-items: flex-start; }
+  .supplier strong { font-size: 13pt; }
+  .meta { text-align: right; }
+  .meta h1 { margin: 0 0 6px; font-size: 22pt; letter-spacing: 2px; color: #1f3a5f; }
+  .bill-to { margin: 28px 0 18px; padding: 10px 12px; background: #f3f5f8; width: 45%; }
+  table.lines { width: 100%; border-collapse: collapse; margin-top: 8px; }
+  table.lines th { text-align: left; border-bottom: 2px solid #1f3a5f; padding: 6px 4px; }
+  table.lines td { border-bottom: 1px solid #ddd; padding: 6px 4px; }
+  .num, table.lines th.num { text-align: right; white-space: nowrap; }
+  table.totals { margin-left: auto; margin-top: 16px; border-collapse: collapse; }
+  table.totals td { padding: 4px 8px; }
+  table.totals tr.total td { border-top: 2px solid #1f3a5f; font-weight: bold; font-size: 12pt; }
+  .footer { margin-top: 40px; font-size: 9pt; color: #666; }
+</style>
+</head>
+<body>
+  <div class="top">
+    <div class="supplier">
+      <strong>Скопски Печат ДООЕЛ</strong><br>
+      ул. Македонија 25, 1000 Скопје<br>
+      ЕДБ за ДДВ: MK4030005551234<br>
+      IBAN: MK44 2400 0000 1234 561
+    </div>
+    <div class="meta">
+      <h1>ФАКТУРА</h1>
+      Бр. 118/2026<br>
+      Датум: 07.11.2026<br>
+      Рок на плаќање: 21.11.2026
+    </div>
+  </div>
+
+  <div class="bill-to">
+    <strong>Купувач:</strong><br>
+    ТуДеМун ДОО, Скопје
+  </div>
+
+  <table class="lines">
+    <thead>
+      <tr><th>Опис</th><th class="num">Кол.</th><th class="num">Цена</th><th class="num">Износ</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Печатење флаери А5</td><td class="num">1000</td><td class="num">12,00</td><td class="num">12.000,00</td></tr>
+      <tr><td>Графички дизајн</td><td class="num">1</td><td class="num">3.000,00</td><td class="num">3.000,00</td></tr>
+    </tbody>
+  </table>
+
+  <table class="totals">
+    <tr><td>Основица</td><td class="num">15.000,00</td></tr>
+    <tr><td>ДДВ 18%</td><td class="num">2.700,00</td></tr>
+    <tr class="total"><td>Вкупно за плаќање ден.</td><td class="num">17.700,00</td></tr>
+  </table>
+
+  <div class="footer">Ви благодариме за соработката.</div>
+</body>
+</html>

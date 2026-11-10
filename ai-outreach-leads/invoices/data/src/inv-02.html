@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>INVOICE VO-2026/0871</title>
+<style>
+  @page { size: A4; margin: 18mm; }
+  body { font-family: "DejaVu Sans", Arial, sans-serif; font-size: 10.5pt; color: #222; }
+  .top { display: flex; justify-content: space-between; align-items: flex-start; }
+  .supplier strong { font-size: 13pt; }
+  .meta { text-align: right; }
+  .meta h1 { margin: 0 0 6px; font-size: 22pt; letter-spacing: 2px; color: #1f3a5f; }
+  .bill-to { margin: 28px 0 18px; padding: 10px 12px; background: #f3f5f8; width: 45%; }
+  table.lines { width: 100%; border-collapse: collapse; margin-top: 8px; }
+  table.lines th { text-align: left; border-bottom: 2px solid #1f3a5f; padding: 6px 4px; }
+  table.lines td { border-bottom: 1px solid #ddd; padding: 6px 4px; }
+  .num, table.lines th.num { text-align: right; white-space: nowrap; }
+  table.totals { margin-left: auto; margin-top: 16px; border-collapse: collapse; }
+  table.totals td { padding: 4px 8px; }
+  table.totals tr.total td { border-top: 2px solid #1f3a5f; font-weight: bold; font-size: 12pt; }
+  .footer { margin-top: 40px; font-size: 9pt; color: #666; }
+</style>
+</head>
+<body>
+  <div class="top">
+    <div class="supplier">
+      <strong>Vardar Office DOO</strong><br>
+      bul. Ilinden 40, 1000 Skopje<br>
+      VAT ID: MK4030009876543<br>
+      IBAN: MK59 3000 0000 0424 251
+    </div>
+    <div class="meta">
+      <h1>INVOICE</h1>
+      No. VO-2026/0871<br>
+      Date: 05.11.2026<br>
+      Due: 20.11.2026
+    </div>
+  </div>
+
+  <div class="bill-to">
+    <strong>Bill to:</strong><br>
+    ToTheMoon DOO, Skopje
+  </div>
+
+  <table class="lines">
+    <thead>
+      <tr><th>Description</th><th class="num">Qty</th><th class="num">Unit price</th><th class="num">Amount</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Printer paper A4 (box)</td><td class="num">10</td><td class="num">250,00</td><td class="num">2.500,00</td></tr>
+      <tr><td>Toner cartridge</td><td class="num">2</td><td class="num">3.400,00</td><td class="num">6.800,00</td></tr>
+      <tr><td>Delivery</td><td class="num">1</td><td class="num">300,00</td><td class="num">300,00</td></tr>
+    </tbody>
+  </table>
+
+  <table class="totals">
+    <tr><td>Net</td><td class="num">9.900,00</td></tr>
+    <tr><td>VAT 18%</td><td class="num">1.782,00</td></tr>
+    <tr class="total"><td>Total MKD</td><td class="num">11.682,00</td></tr>
+  </table>
+
+  <div class="footer">Thank you for your order.</div>
+</body>
+</html>

@@ -1,0 +1,32 @@
+{
+  "supplier_name": "Vardar Office DOO",
+  "supplier_vat_id": "MK4030009876543",
+  "iban": "MK59300000000424251",
+  "invoice_number": "VO-2026/0871",
+  "invoice_date": "2026-11-05",
+  "due_date": "2026-11-20",
+  "currency": "MKD",
+  "lines": [
+    {
+      "description": "Printer paper A4 (box)",
+      "quantity": 10,
+      "unit_price": 250,
+      "amount": 2500
+    },
+    {
+      "description": "Toner cartridge",
+      "quantity": 2,
+      "unit_price": 3400,
+      "amount": 6800
+    },
+    {
+      "description": "Delivery",
+      "quantity": 1,
+      "unit_price": 300,
+      "amount": 300
+    }
+  ],
+  "net": 9900,
+  "vat": 1782,
+  "total": 11682
+}

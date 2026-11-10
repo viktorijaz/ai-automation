@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="sr">
+<head>
+<meta charset="utf-8">
+<title>RAČUN 2026-311</title>
+<style>
+  @page { size: A4; margin: 18mm; }
+  body { font-family: "DejaVu Sans", Arial, sans-serif; font-size: 10.5pt; color: #222; }
+  .top { display: flex; justify-content: space-between; align-items: flex-start; }
+  .supplier strong { font-size: 13pt; }
+  .meta { text-align: right; }
+  .meta h1 { margin: 0 0 6px; font-size: 22pt; letter-spacing: 2px; color: #1f3a5f; }
+  .bill-to { margin: 28px 0 18px; padding: 10px 12px; background: #f3f5f8; width: 45%; }
+  table.lines { width: 100%; border-collapse: collapse; margin-top: 8px; }
+  table.lines th { text-align: left; border-bottom: 2px solid #1f3a5f; padding: 6px 4px; }
+  table.lines td { border-bottom: 1px solid #ddd; padding: 6px 4px; }
+  .num, table.lines th.num { text-align: right; white-space: nowrap; }
+  table.totals { margin-left: auto; margin-top: 16px; border-collapse: collapse; }
+  table.totals td { padding: 4px 8px; }
+  table.totals tr.total td { border-top: 2px solid #1f3a5f; font-weight: bold; font-size: 12pt; }
+  .footer { margin-top: 40px; font-size: 9pt; color: #666; }
+</style>
+</head>
+<body>
+  <div class="top">
+    <div class="supplier">
+      <strong>Beogradska Logistika d.o.o.</strong><br>
+      Bulevar oslobođenja 77, 11000 Beograd<br>
+      PIB: 101234567<br>
+      IBAN: RS35 2600 0560 1001 6113 79
+    </div>
+    <div class="meta">
+      <h1>RAČUN</h1>
+      Br. 2026-311<br>
+      Datum: 04.11.2026<br>
+      Valuta plaćanja: 19.11.2026
+    </div>
+  </div>
+
+  <div class="bill-to">
+    <strong>Kupac:</strong><br>
+    ToTheMoon DOO, Skopje, Severna Makedonija
+  </div>
+
+  <table class="lines">
+    <thead>
+      <tr><th>Opis</th><th class="num">Kol.</th><th class="num">Cena</th><th class="num">Iznos</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Transport Beograd–Skoplje</td><td class="num">2</td><td class="num">18.000,00</td><td class="num">36.000,00</td></tr>
+      <tr><td>Carinsko posredovanje</td><td class="num">1</td><td class="num">6.500,00</td><td class="num">6.500,00</td></tr>
+    </tbody>
+  </table>
+
+  <table class="totals">
+    <tr><td>Osnovica</td><td class="num">42.500,00</td></tr>
+    <tr><td>PDV 20%</td><td class="num">8.500,00</td></tr>
+    <tr class="total"><td>Ukupno RSD</td><td class="num">51.000,00</td></tr>
+  </table>
+
+  <div class="footer">Hvala na saradnji.</div>
+</body>
+</html>

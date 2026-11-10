@@ -1,0 +1,16 @@
+{
+  "supplier_name": "Brightline Hosting DOOEL",
+  "supplier_vat_id": "MK4030001234567",
+  "iban": "MK07250120000058984",
+  "invoice_number": "2026-0142",
+  "invoice_date": "2026-11-03",
+  "due_date": "2026-11-17",
+  "currency": "MKD",
+  "lines": [
+    { "description": "Web hosting (monthly)", "quantity": 12, "unit_price": 1000, "amount": 12000 },
+    { "description": "Domain renewal", "quantity": 1, "unit_price": 1200, "amount": 1200 }
+  ],
+  "net": 13200,
+  "vat": 2376,
+  "total": 15576
+}

@@ -1,0 +1,26 @@
+{
+  "supplier_name": "Скопски Печат ДООЕЛ",
+  "supplier_vat_id": "MK4030005551234",
+  "iban": "MK44240000001234561",
+  "invoice_number": "118/2026",
+  "invoice_date": "2026-11-07",
+  "due_date": "2026-11-21",
+  "currency": "MKD",
+  "lines": [
+    {
+      "description": "Печатење флаери А5",
+      "quantity": 1000,
+      "unit_price": 12,
+      "amount": 12000
+    },
+    {
+      "description": "Графички дизајн",
+      "quantity": 1,
+      "unit_price": 3000,
+      "amount": 3000
+    }
+  ],
+  "net": 15000,
+  "vat": 2700,
+  "total": 17700
+}
