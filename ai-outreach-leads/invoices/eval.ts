@@ -5,7 +5,8 @@
 //        npx tsx invoices/eval.ts inv-03 --repeat 20   (same invoice 20 times: error rate + interval, random vs systematic)
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { extract, costUsd, tidy, MODEL, type Invoice } from "./extract";
+import { costUsd } from "../core/llm";
+import { extract, tidy, MODEL, type Invoice } from "./extract";
 
 const DATA = "invoices/data";
 const RESULTS = "invoices/results";
@@ -97,7 +98,7 @@ for (const file of files) {
     else {
       const result = await extract(join(DATA, file));
       invoice = result.invoice;
-      cost += costUsd(result.usage);
+      cost += costUsd(MODEL, result.usage);
     }
     if (run === 0) outputs[file] = invoice;
 

@@ -1,5 +1,5 @@
 // Read-only queries for the dashboard
-import { db } from "../pipeline";
+import { db } from "../core/db";
 
 import { createClient } from "../lib/supabase/server";
 

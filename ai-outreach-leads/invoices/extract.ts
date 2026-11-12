@@ -1,27 +1,14 @@
 // v0: read one invoice (PDF or photo) into structured fields. Usage: npx tsx invoices/extract.ts invoices/data/inv-01.pdf
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { extname } from "node:path";
 import { pathToFileURL } from "node:url";
-import Anthropic from "@anthropic-ai/sdk";
+import type Anthropic from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { z } from "zod";
+import { assertPriced, client } from "../core/llm";
 
-if (existsSync(".env")) process.loadEnvFile();
-
-const client = new Anthropic({ maxRetries: 1, timeout: 120_000 });
 export const MODEL = process.env.INVOICE_MODEL ?? "claude-opus-5-5"; // INVOICE_MODEL=claude-haiku-5-5 to compare
-
-// $ per 1 MILLION tokens; an unknown model fails here, before any call is paid for
-const PRICES: Record<string, { input: number; output: number }> = {
-  "claude-opus-5-5": { input: 4, output: 20 },
-  "claude-haiku-5-5": { input: 0.1, output: 0.5 },
-};
-const PRICE = PRICES[MODEL];
-if (!PRICE) throw new Error(`no price for model ${MODEL}`);
-
-export function costUsd(usage: Anthropic.Usage): number {
-  return (usage.input_tokens * PRICE.input + usage.output_tokens * PRICE.output) / 1_000_000;
-}
+assertPriced(MODEL);
 
 // ---------- The fields (mirror of data/*.expected.json) ----------
 
@@ -94,7 +81,7 @@ export async function extract(path: string): Promise<{ invoice: Invoice | null; 
     system: SYSTEM,
     output_config: { effort: "low", format: zodOutputFormat(InvoiceSchema) },
     messages: [{ role: "user", content: [fileBlock(path), { type: "text", text: "Extract the invoice fields." }] }],
-  });
+  }, { timeout: 120_000 }); // PDFs take longer than the shared default
   if (response.stop_reason === "refusal") return { invoice: null, usage: response.usage };
   return { invoice: response.parsed_output && tidy(response.parsed_output), usage: response.usage };
 }

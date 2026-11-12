@@ -1,27 +1,16 @@
 // Everything needed to process leads; importing it runs nothing
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import Anthropic from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { z } from "zod";
-import pg from "pg";
 import { parse } from "csv-parse/sync";
+import { db } from "./core/db";
+import { assertPriced, client, costUsd } from "./core/llm";
 import { clean, findThreat } from "./guard";
 
-// Locally .env holds the secrets; on Vercel they come from the project settings
-if (existsSync(".env")) process.loadEnvFile();
-
-// Quick retries for network blips; longer outages are retried by later batches
-export const client = new Anthropic({ maxRetries: 1, timeout: 60_000 });
-export const db = new pg.Pool({ connectionString: process.env.DATABASE_URL });
-
 const MODEL = "claude-opus-5-5"; // "claude-haiku-5-5" is ~40x cheaper
-
-// $ per 1 MILLION tokens
-const PRICES: Record<string, { input: number; output: number }> = {
-  "claude-opus-5-5": { input: 4, output: 20 },
-  "claude-haiku-5-5": { input: 0.1, output: 0.5 },
-};
+assertPriced(MODEL);
 
 // ---------- Leads ----------
 
@@ -132,8 +121,7 @@ async function callLLM(prompt: string, orgId: string): Promise<{ email: Email | 
 
   // Receipt first, outside any transaction: spent money must survive a rollback
   const { input_tokens, output_tokens } = response.usage;
-  const price = PRICES[MODEL];
-  const cost = (input_tokens * price.input + output_tokens * price.output) / 1_000_000;
+  const cost = costUsd(MODEL, response.usage);
   const receipt = await db.query(
     `INSERT INTO ai_usage (org_id, model, input_tokens, output_tokens, cost_usd, status)
      VALUES ($1, $2, $3, $4, $5, 'pending') RETURNING id`,

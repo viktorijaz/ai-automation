@@ -1,6 +1,7 @@
 // CSV → leads table as 'pending'. Usage: npx tsx upload-leads.ts data/leads.csv
 // Supabase: DATABASE_URL="$SUPA" npx tsx upload-leads.ts data/leads.csv
-import { addLeads, db, readLeads } from "./pipeline";
+import { db } from "./core/db";
+import { addLeads, readLeads } from "./pipeline";
 
 const ORG_ID = "acme";
 const file = process.argv[2] ?? "data/leads.csv";
