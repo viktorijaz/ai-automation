@@ -67,3 +67,26 @@ pre {
 button.secondary { background: #fff; color: #1f2328; border-color: #d0d7de; }
 .login { max-width: 420px; margin-top: 15vh; text-align: center; }
 .login button { margin-top: 12px; padding: 10px 20px; font-size: 16px; }
+
+/* Navigation */
+nav { gap: 4px; margin-left: 16px; }
+nav a { padding: 4px 10px; border-radius: 6px; color: #1f2328; text-decoration: none; }
+nav a.active { background: #eaeef2; font-weight: 600; }
+a { color: #0969da; }
+
+/* Invoices */
+main.wide { max-width: 1400px; }
+.split { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
+.document iframe, .document img { width: 100%; height: 80vh; border: 1px solid #d0d7de; border-radius: 6px; object-fit: contain; }
+h3 { margin: 16px 0 8px; font-size: 15px; }
+.flags { margin: 0; padding-left: 0; list-style: none; }
+.flags li { padding: 6px 0; border-bottom: 1px solid #eaeef2; font-size: 14px; }
+.flags li.high strong { color: #cf222e; }
+.flags li.medium strong { color: #9a6700; }
+.ok { color: #1a7f37; }
+.note.error { color: #cf222e; }
+.block { display: block; margin-top: 6px; }
+.decision textarea { width: 100%; font: inherit; padding: 8px; border: 1px solid #d0d7de; border-radius: 6px; margin-bottom: 8px; }
+button.danger { background: #cf222e; border-color: #cf222e; }
+.badge.approved { color: #1a7f37; }
+.badge.rejected { color: #cf222e; }

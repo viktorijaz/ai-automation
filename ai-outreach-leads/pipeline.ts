@@ -1,16 +1,20 @@
 // Everything needed to process leads; importing it runs nothing
 import { readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import Anthropic from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { z } from "zod";
 import { parse } from "csv-parse/sync";
 import { db } from "./core/db";
-import { assertPriced, client, costUsd } from "./core/llm";
+import { publicError } from "./core/errors";
+import { assertPriced, client, isTemporary, overDailyCap, readReply, recordUsage, setUsageStatus, timeLeftFor } from "./core/llm";
+import { orgFilter, type Scope } from "./core/scope";
+
+export type { Scope };
 import { clean, findThreat } from "./guard";
 
 const MODEL = "claude-opus-5-5"; // "claude-haiku-5-5" is ~40x cheaper
 assertPriced(MODEL);
+const CALL_TIMEOUT_MS = 20_000; // an email takes ~5 s; under Vercel's 60 s, a later run retries
 
 // ---------- Leads ----------
 
@@ -110,33 +114,27 @@ function isPlainText(s: string): boolean {
 
 // ---------- One AI call, one receipt ----------
 
-async function callLLM(prompt: string, orgId: string): Promise<{ email: Email | null; usageId: string }> {
-  const response = await client.messages.parse({
+async function callLLM(prompt: string, orgId: string, leadId: string): Promise<{ email: Email | null; usageId: string }> {
+  // create(), not parse(): parse() throws on a bad reply before the receipt is written
+  const response = await client.messages.create({
     model: MODEL,
     max_tokens: 2000,
     system: SYSTEM,
     output_config: { effort: "low", format: zodOutputFormat(EmailSchema) },
     messages: [{ role: "user", content: prompt }],
-  });
+  }, { timeout: CALL_TIMEOUT_MS, maxRetries: 0 });
 
   // Receipt first, outside any transaction: spent money must survive a rollback
-  const { input_tokens, output_tokens } = response.usage;
-  const cost = costUsd(MODEL, response.usage);
-  const receipt = await db.query(
-    `INSERT INTO ai_usage (org_id, model, input_tokens, output_tokens, cost_usd, status)
-     VALUES ($1, $2, $3, $4, $5, 'pending') RETURNING id`,
-    [orgId, MODEL, input_tokens, output_tokens, cost],
-  );
-  const usageId: string = receipt.rows[0].id;
+  const usageId = await recordUsage({ orgId, module: "outreach", entityId: leadId, model: MODEL }, response.usage);
 
-  const email = response.parsed_output;
-  let failure: string | null = null;
+  const email = readReply(response, EmailSchema);
+  let failure: "parse_failed" | "check_failed" | "blocked" | null = null;
   if (email === null) failure = "parse_failed";
   else if (!isPlainText(email.subject)) failure = "check_failed";
   else if (findThreat(email, CANARY) !== null) failure = "blocked";
 
   if (failure !== null) {
-    await db.query(`UPDATE ai_usage SET status = $1 WHERE id = $2`, [failure, usageId]);
+    await setUsageStatus(usageId, failure);
     return { email: null, usageId };
   }
   return { email, usageId };
@@ -155,7 +153,7 @@ async function saveEmail(lead: Lead, email: Email, usageId: string, orgId: strin
       [orgId, lead.name, lead.company, email.subject, email.body, usageId],
     );
     const saved = inserted.rowCount === 1;
-    await conn.query(`UPDATE ai_usage SET status = $1 WHERE id = $2`, [saved ? "saved" : "duplicate", usageId]);
+    await setUsageStatus(usageId, saved ? "saved" : "duplicate", conn);
     await conn.query("COMMIT");
     return saved;
   } catch (e) {
@@ -179,9 +177,9 @@ async function alreadyEmailed(lead: Lead, orgId: string): Promise<boolean> {
 export type Outcome = "already_emailed" | "saved" | "not_saved" | "duplicate";
 
 // API and database errors are thrown, so processBatch() can retry the lead later
-export async function processLead(lead: Lead, orgId: string): Promise<Outcome> {
+export async function processLead(lead: Lead, orgId: string, leadId: string): Promise<Outcome> {
   if (await alreadyEmailed(lead, orgId)) return "already_emailed";
-  const { email, usageId } = await callLLM(buildPrompt(lead), orgId);
+  const { email, usageId } = await callLLM(buildPrompt(lead), orgId, leadId);
   if (email === null) return "not_saved";
   return (await saveEmail(lead, email, usageId, orgId)) ? "saved" : "duplicate";
 }
@@ -193,22 +191,6 @@ const STUCK_AFTER = "10 minutes"; // 'processing' longer than this = the run cra
 
 type LeadRow = Lead & { id: string; org_id: string; attempts: number };
 
-// Who a run acts for: one org (a user's button) or every org (cron, CLI); no default on purpose
-export type Scope = { orgId: string } | "all-orgs";
-
-// null = no org filter; used as $n in "($n::text IS NULL OR org_id = $n)"
-function orgFilter(scope: Scope): string | null {
-  return scope === "all-orgs" ? null : scope.orgId;
-}
-
-// Errors that might pass on their own: try the lead again in a later run
-function isTemporary(e: unknown): boolean {
-  return (
-    e instanceof Anthropic.RateLimitError ||
-    e instanceof Anthropic.InternalServerError ||
-    e instanceof Anthropic.APIConnectionError
-  );
-}
 
 // A crashed run leaves leads in 'processing': give them back, or fail them after MAX_ATTEMPTS
 async function releaseStuck(scope: Scope): Promise<number> {
@@ -242,35 +224,52 @@ async function claimBatch(size: number, scope: Scope): Promise<LeadRow[]> {
   return result.rows;
 }
 
-async function finishLead(id: string, status: "done" | "failed" | "pending", error: string | null) {
-  await db.query(`UPDATE leads SET status = $1, last_error = $2 WHERE id = $3`, [status, error, id]);
+// Only the run holding this claim may write: still 'processing', and no newer claim raised attempts
+const OWNED = `id = $1 AND status = 'processing' AND attempts = $2`;
+
+// False if a newer run owns the lead now: nothing is written
+async function finishLead(row: LeadRow, status: "done" | "failed" | "pending", error: string | null): Promise<boolean> {
+  const r = await db.query(`UPDATE leads SET status = $3, last_error = $4 WHERE ${OWNED}`, [row.id, row.attempts, status, error]);
+  if (r.rowCount !== 1) console.error(`lead ${row.id} attempt ${row.attempts}: outcome dropped, a newer run owns it`);
+  return r.rowCount === 1;
 }
 
-export type BatchResult = { released: number; claimed: number; done: number; failed: number; retry: number };
+export type BatchResult = { released: number; claimed: number; done: number; failed: number; retry: number; deferred: number; superseded: number };
 
 // One run: release stuck leads, claim a batch, process each lead, record the outcome
 export async function processBatch(size: number, scope: Scope): Promise<BatchResult> {
-  const result: BatchResult = { released: await releaseStuck(scope), claimed: 0, done: 0, failed: 0, retry: 0 };
+  const startedAt = Date.now();
+  const result: BatchResult = { released: await releaseStuck(scope), claimed: 0, done: 0, failed: 0, retry: 0, deferred: 0, superseded: 0 };
   const batch = await claimBatch(size, scope);
   result.claimed = batch.length;
 
   for (const [i, row] of batch.entries()) {
+    if (!timeLeftFor(startedAt, CALL_TIMEOUT_MS)) {
+      const untouched = batch.slice(i).map((r) => r.id);
+      await db.query(`UPDATE leads SET status = 'pending', attempts = attempts - 1 WHERE id = ANY($1)`, [untouched]); // next run
+      result.deferred += untouched.length;
+      break;
+    }
     const { id, org_id, attempts, ...lead } = row;
+    if (await overDailyCap(org_id)) {
+      // Over the cap: back to the queue for tomorrow, without using up an attempt
+      await db.query(`UPDATE leads SET status = 'pending', attempts = attempts - 1 WHERE ${OWNED}`, [id, attempts]);
+      result.deferred++;
+      continue;
+    }
     try {
-      const outcome = await processLead(lead, org_id);
-      if (outcome === "not_saved") {
-        // Content problem (bad output, markdown, blocked attack): retrying would just pay again
-        await finishLead(id, "failed", "no usable email (parse, check or guard)");
-        result.failed++;
-      } else {
-        await finishLead(id, "done", null);
-        result.done++;
-      }
+      const outcome = await processLead(lead, org_id, String(id));
+      // Content problem (bad output, markdown, blocked attack): retrying would just pay again
+      const failed = outcome === "not_saved";
+      if (!(await finishLead(row, failed ? "failed" : "done", failed ? "no usable email (parse, check or guard)" : null))) result.superseded++;
+      else if (failed) result.failed++;
+      else result.done++;
     } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
+      const reason = publicError(e, `lead ${id} attempt ${attempts}`);
       const giveUp = attempts >= MAX_ATTEMPTS;
-      await finishLead(id, giveUp ? "failed" : "pending", message);
-      if (giveUp) result.failed++;
+      const owned = await finishLead(row, giveUp ? "failed" : "pending", giveUp ? `${reason}; gave up after ${MAX_ATTEMPTS} tries` : `${reason}; will try again`);
+      if (!owned) result.superseded++;
+      else if (giveUp) result.failed++;
       else result.retry++;
       // Not temporary (bad key, wrong model, database down): the rest of the batch would fail too
       if (!isTemporary(e)) {

@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { signOut } from "./actions";
 import { getCurrentOrg, getLeads, getProgress } from "./data";
 import { ProcessButton, UploadForm } from "./forms";
+import { Header } from "./header";
 
 export const dynamic = "force-dynamic"; // always read fresh data
 
@@ -29,13 +30,7 @@ export default async function Home() {
 
   return (
     <main>
-      <header>
-        <h1>ai-outreach</h1>
-        <form action={signOut} className="row">
-          <span className="muted">{org.email} · org: {org.orgId}</span>
-          {process.env.DASHBOARD_ENABLED !== "true" && <button className="secondary">Sign out</button>}
-        </form>
-      </header>
+      <Header org={org} active="leads" />
 
       <section>
         <h2>Upload leads</h2>

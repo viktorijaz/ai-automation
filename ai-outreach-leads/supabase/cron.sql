@@ -1,4 +1,5 @@
--- Supabase only: every 5 hours, call the Vercel route, but only when there is work.
+-- Supabase only: every 5 hours, call the Vercel route, but only when there is work (leads or invoices).
+-- Changed 2026-11-12 (v1b): also wakes for pending or stuck invoices. Re-apply with cron.alter_job (see README).
 -- Not a migration: local Docker Postgres has no pg_cron / pg_net.
 --
 -- Before running this, once, in the Supabase SQL editor (values never go into git):
@@ -22,6 +23,10 @@ select cron.schedule(
   where exists (
     select 1 from public.leads
     where status = 'pending'
+       or (status = 'processing' and claimed_at < now() - interval '10 minutes')
+  ) or exists (
+    select 1 from public.invoices
+    where (status = 'pending' and file_path is not null)
        or (status = 'processing' and claimed_at < now() - interval '10 minutes')
   );
   $$

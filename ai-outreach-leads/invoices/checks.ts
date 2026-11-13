@@ -102,7 +102,7 @@ export function checkInvoice(inv: Invoice, vendors: Vendors): Flag[] {
     flags.push({
       check: "iban_changed",
       severity: "high",
-      message: `IBAN differs from the one on file for ${vendor.name} (${vendor.iban}); confirm by phone before paying`,
+      message: `IBAN differs from the one on file for ${vendor.name} (…${vendor.iban.slice(-4)}); confirm by phone before paying`,
     });
   }
 

@@ -42,7 +42,7 @@ PDF ──► Claude (structured output) ──► checks ──► review scree
 
 Duplicate invoices (same supplier + number) need history, so that check comes with the database in v1.
 
-**Then v1:** shared code into `core/`, an `invoices` queue table, an upload page, QuickBooks sandbox + OAuth (Steps 1–3 and 7 below).
+**Then v1:** shared code into `core/`, an `invoices` queue table, an upload page, QuickBooks sandbox + OAuth (Steps 1–3 and 7 below). v1a done; v1b spec below.
 
 ### First eval results (2026-11-10, Opus, 5 invoices)
 
@@ -93,6 +93,8 @@ npx tsx invoices/eval.ts inv-03 --repeat 20              # 20 runs: error rate, 
 google-chrome --headless=new --no-pdf-header-footer \
   --print-to-pdf=invoices/data/inv-02.pdf "file://$PWD/invoices/data/src/inv-02.html"   # HTML → PDF
 ```
+
+Default model: Haiku since v1b (`INVOICE_MODEL=claude-opus-5-5` to compare). The `--repeat` cost above is for Opus.
 
 VPN off when calling Claude (it blocked api.anthropic.com).
 
@@ -207,6 +209,117 @@ invoices/   documents → checks → accounting     (Proof 7)
 | v1 | move shared parts into `core/`, add `invoices/` to the app, QuickBooks | **here, once** |
 | v2 | inbox + review screen | — |
 | v3 | Odoo adapter | — |
+
+## v1b spec: invoices in the app (table + upload + UI) — 2026-11-12
+
+v1a (shared setup in `core/`) is done: commit `5e6398f`. This spec is agreed before any v1b code is written.
+
+### Goal
+An accountant logs in, uploads an invoice, and within ~30 s sees the extracted
+fields next to the original document, with fraud and math flags.
+
+### Architecture
+Modular monolith: one app, modules `core/`, `outreach/`, `invoices/`.
+Rule: if the code says "lead" or "invoice", it isn't core.
+
+### Scope
+
+**Data**
+- `invoices` table, per org: file path, status (pending/processing/done/failed),
+  attempts, extracted fields (JSON), flags (JSON), created_at,
+  decision ('approved' | 'rejected' | null), decided_by, decided_at, decision_note.
+  Fields and lines stay JSON for now (exactly what extract() returns); split into
+  tables when an integration or a query needs them.
+- Known suppliers stay in vendors.json for v1b (one demo org).
+- Duplicate check: same org + supplier VAT ID + invoice number → flag `duplicate`.
+  Flagged, never blocked: the accountant decides (corrections and credit notes are legitimate).
+  Lives in the invoices module (needs history); `checks.ts` stays pure.
+- File hash: `file_sha256` column; the same file uploaded again is flagged `duplicate`
+  before the AI call, so it costs nothing.
+- Files in a private Supabase Storage bucket, path `<org_id>/<invoice_id>.<ext>`.
+  The uploaded filename is untrusted: stored only as display text, never used in the path.
+  The extension comes from the detected content type.
+- Order: insert the row ('pending') → upload the file → extract. A failed upload leaves
+  a visible 'failed' row, never a file without a row.
+- The detail page gets the file through a signed URL valid for 5 minutes, created
+  by the server after the org check.
+
+**Receipts**
+- `ai_usage` gets `module` ('outreach' | 'invoices') and `entity_id` (text, no foreign key).
+- Written only by core/llm.ts, for every call, failed or not.
+- Never deleted; only `status` is set once after the call. Allowed statuses gain `refused`.
+- An invoice's cost = SUM of its receipts. Works the same if modules ever become services.
+- Outreach writes them too: module 'outreach', entity_id = lead id.
+
+**Processing**
+- Model: Haiku (`claude-haiku-5-5`) by default; same accuracy as Opus after tidy() on the v0 set.
+- Upload → row 'pending' → extract + checks run straight away for that file.
+- Same queue columns as leads (status, attempts, claimed_at, last_error).
+- The existing cron also sweeps invoices (all orgs): releases rows stuck in 'processing'
+  and retries temporary failures, up to the attempt limit, as outreach does.
+
+**UI** (same app, same style as the leads dashboard)
+- Header nav: Leads | Invoices.
+- `/invoices`: upload box (PDF, PNG, JPG, max 10 MB) + table:
+  supplier · number · date · total + currency · status · flags (🔴 2 · 🟠 1 / ✓) · cost.
+- `/invoices/[id]`: document on the left, on the right the fields,
+  the lines table and each flag with its message. Fields are read-only.
+- Approve / Reject buttons with a note, on extracted invoices only.
+  The note is required to reject, and to approve while any 🔴 flag is present.
+  Who, when and the note are recorded; a decision is final in v1b.
+- The list shows the decision (approved / rejected / waiting).
+
+**Security**
+- Every query and file path scoped by org (the same Scope rule as outreach).
+- File type checked by content, not just by the extension; size limit enforced on the server.
+- Invoice content stays data, never instructions (same SYSTEM rules as v0).
+
+### Out of scope
+- Vendors table + UI (next step)
+- Correcting extracted fields (next step)
+- Changing a decision once made
+- QuickBooks / any integration
+- Email inbox
+- Uploading several files at once
+- Real-invoice test set
+- Splitting into services
+- Two simultaneous uploads of the same invoice (check-then-act race; both may pass the duplicate check)
+- Normalising invoice numbers for the duplicate check (exact match only, so "INV-014" and "INV 014" count as different)
+
+### Done when
+1. Upload inv-03.pdf → 🔴 iban_changed with the vendor's known IBAN.
+2. Upload inv-02.pdf → 🟠 lines_vs_net.
+3. The same PDF uploaded twice → second one flagged `duplicate`.
+4. The detail page shows the PDF next to the fields.
+5. A user in another org can't see the invoice or its file.
+6. Every extraction call, including failed ones, has a receipt with module + entity_id.
+7. Approving inv-03 (🔴) without a note is refused; with a note it's recorded with who and when.
+8. Tests + `next build` pass; security-reviewer finds nothing high.
+
+### Open questions
+None: all decided 2026-11-12.
+
+### Built (2026-11-12): what differs from the spec
+- **Upload limit 4 MB, not 10 MB:** Vercel caps a request body at ~4.5 MB. 10 MB would need direct browser-to-storage uploads (a signed upload URL); not needed for a demo.
+- **Invoice ids are random UUIDs:** local dev uploads to the real bucket, so ids must never clash; they're also unguessable in URLs.
+- **Duplicates are 🔴 (high):** paying twice is a money loss, so approving a duplicate needs a note.
+- Tests: `rules.test.ts` (upload + decision rules) and `intake.test.ts` (the whole flow on the local Postgres, storage and the AI call stood in).
+- Deploy steps: main README, "Deploying v1b".
+
+### Next step (after v1b): vendors
+- `vendors` table per org; created and changed only by a person in the UI, never by an invoice.
+- `/vendors` page + "Add vendor" form; "Add as vendor" on `unknown_supplier`,
+  pre-filled, with a required "IBAN confirmed with the supplier" checkbox.
+- IBAN validated (format, length, mod-97) before saving.
+- Invoices stay as evidence; the vendor record is the trusted layer.
+- Correcting extracted fields before approval: keep the AI's value and the person's
+  correction side by side, with who changed it.
+- Ask the accountants: how do supplier bank changes reach them, and who confirms?
+
+### Later improvements (decided 2026-11-13)
+- **System-wide rate limiting:** limits for the whole app (per user, per org, per IP, and a total daily AI budget), not just a per-org cap on AI calls.
+- **One retry for a model slip:** a reply that finished (`stop_reason` "end_turn") but doesn't fit the schema gets one more try. A cut-off reply (`max_tokens`) or a refusal still fails at once. For now every parse failure fails at once.
+- **Permanent errors fail at once:** invoices retry every error up to 3 times, even a bad key or a 400. Use `isTemporary()` as outreach does, but keep storage and database errors retryable.
 
 ## Open questions
 
